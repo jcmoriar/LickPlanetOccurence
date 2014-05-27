@@ -50,6 +50,7 @@ class RVTimeSeries(object):
             remainingFreqs = remainingFreqs[remainingInd]
             self.peaks.append(maxPower)
             self.peakLocs.append(maxFreq)
+        #need to use a real peak finding algorithm
 
 
 
