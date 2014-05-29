@@ -36,27 +36,16 @@ class RVTimeSeries(object):
 
     def FindPeriodogramPeaks(self, nPeaks=10):
         """Find the nPeaks highest peaks in the periodogram"""
-
-        self.peaks = []
-        self.peakLocs = []
-        remainingPeriodogram = self.periodogram.copy()
-        remainingFreqs = self.freqs.copy()
-        for i in range(nPeaks):
-            maxInd = remainingPeriodogram.argmax()
-            maxPower = remainingPeriodogram[maxInd]
-            maxFreq = remainingFreqs[maxInd]
-            remainingInd = np.where(np.abs(remainingFreqs-maxFreq)/maxFreq > 0.05)
-            remainingPeriodogram = remainingPeriodogram[remainingInd]
-            remainingFreqs = remainingFreqs[remainingInd]
-            self.peaks.append(maxPower)
-            self.peakLocs.append(maxFreq)
-        #need to use a real peak finding algorithm
-
-
-
-
-        
-
+        #Find Peaks
+        deriv = self.periodogram[1::]-self.periodogram[0:-1]
+        peakInd = np.where(((deriv[0:-1] > 0) != (deriv[1::] > 0)) & (deriv[0:-1] > 0))
+        peakInd = np.array(peakInd[0]) + 1
+        self.peaks = self.periodogram[peakInd]
+        self.peakLocs = self.freqs[peakInd]
+        #Sort Peaks
+        sortInd = self.peaks.argsort()
+        self.peaks = self.peaks[sortInd[::-1]]
+        self.peakLocs = self.peakLocs[sortInd[::-1]]
 
     def PlotPeriodogram(self, axis=None):
         """Plot the Lomb-Scargle periodogram"""
@@ -64,10 +53,9 @@ class RVTimeSeries(object):
             fig = plt.figure()
             axis = fig.add_subplot(111)
         plt.hold(True)
-        for peakLoc in self.peakLocs:
+        for peakLoc in self.peakLocs[0:10]:
             axis.plot([np.pi*2/peakLoc, np.pi*2/peakLoc], [0, 1e10], color="black", linewidth=0.5)
         axis.plot(np.pi*2./self.freqs, self.periodogram)
-        print max(np.pi*2./self.freqs), min(np.pi*2./self.freqs)
         axis.set_xlabel("Period (days)")
         axis.set_ylabel("Power")
         axis.set_xlim([2,1e4])
