@@ -72,3 +72,6 @@ def main():
     star.CalculatePeriodogram()
     star.FindPeriodogramPeaks()
     star.PlotPeriodogram()
+
+if __name__ == '__main__':
+    main()
