@@ -14,6 +14,7 @@ class RVTimeSeries(object):
         """Read in data for star."""
         lickData = tio.LickData()
         data = lickData.GetVelsErrs(starName)
+        self.starName = starName
         self.obsTimes = np.array(data[0])
         self.velocities = np.array(data[1])
         self.velocityErrors = np.array(data[2])
@@ -47,6 +48,28 @@ class RVTimeSeries(object):
         self.peaks = self.peaks[sortInd[::-1]]
         self.peakLocs = self.peakLocs[sortInd[::-1]]
 
+    def Plot(self, axis=None):
+        """Plot the time series data"""
+        if axis is None:
+            fig = plt.figure()
+            axis = fig.add_subplot(111)
+        axis.errorbar(self.obsTimes-min(self.obsTimes), self.velocities,
+                      yerr=self.velocityErrors, fmt="o")
+        axis.set_xlabel("Time from first observation (days)")
+        axis.set_ylabel("Velocity (m/s)")
+        axis.set_title(self.starName)
+         
+    def PlotErrMag(self, axis=None):
+        """Plot the magnitude of the errors over time"""
+        if axis is None:
+            fig = plt.figure()
+            axis = fig.add_subplot(111)
+        axis.plot(self.obsTimes-min(self.obsTimes), self.velocityErrors, "o")
+        axis.set_xlabel("Time from first observation (days)")
+        axis.set_ylabel("Velocity Error (m/s)")
+        axis.set_title(self.starName)
+
+
     def PlotPeriodogram(self, axis=None):
         """Plot the Lomb-Scargle periodogram"""
         if axis is None:
@@ -62,6 +85,26 @@ class RVTimeSeries(object):
         axis.set_xscale("log")
         axis.set_ylim([0,max(self.periodogram)*1.1])
 
+
+    def RandomErrors(self):
+        """Return random errors for each data point.
+
+        Description: Calculates the residuals of the best fit sinusoid
+        of the velocities (minus signals from planets if they are known
+        to exist). Random (normal) errors are then scales by these 
+        residuals and returned.
+
+        """
+
+        try:
+            errors = np.random.randn(len(self.residuals))
+            errors = errors*self.residuals
+        catch NameError:
+            self.CalculateResiduals()
+            errors = np.random.randn(len(self.residuals))
+            errors = errors*self.residuals
+        return(errors)
+
         
         
         
@@ -72,6 +115,8 @@ def main():
     star.CalculatePeriodogram()
     star.FindPeriodogramPeaks()
     star.PlotPeriodogram()
+    star.Plot()
+    star.PlotErrMag()
 
 if __name__ == '__main__':
     main()
