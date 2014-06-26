@@ -6,6 +6,8 @@ import plotting as pl
 from astroML.time_series import lomb_scargle
 from scipy.signal import find_peaks_cwt
 from math import *
+from mks import *
+from scipy.optimize import leastsq
 
 class RVTimeSeries(object):
     """ Class to hold and anylize the time series data for one star. """
@@ -21,6 +23,9 @@ class RVTimeSeries(object):
         lickData.Close()
         self.freqs = None
         self.periodogram = None
+        self.residuals = None
+        self.peakLocs = None
+        self.peaks = None
          
     def CalculatePeriodogram(self):
         """Calculate the Lomb-Scargle periodogram."""
@@ -48,12 +53,16 @@ class RVTimeSeries(object):
         self.peaks = self.peaks[sortInd[::-1]]
         self.peakLocs = self.peakLocs[sortInd[::-1]]
 
-    def Plot(self, axis=None):
+    def Plot(self, axis=None, phaseFold=None):
         """Plot the time series data"""
         if axis is None:
             fig = plt.figure()
             axis = fig.add_subplot(111)
-        axis.errorbar(self.obsTimes-min(self.obsTimes), self.velocities,
+        if phaseFold is None:
+            plotTimes = self.obsTimes-min(self.obsTimes)
+        else:
+            plotTimes = np.remainder(self.obsTimes, np.zeros(len(self.obsTimes))+phaseFold)
+        axis.errorbar(plotTimes, self.velocities,
                       yerr=self.velocityErrors, fmt="o")
         axis.set_xlabel("Time from first observation (days)")
         axis.set_ylabel("Velocity (m/s)")
@@ -91,32 +100,115 @@ class RVTimeSeries(object):
 
         Description: Calculates the residuals of the best fit sinusoid
         of the velocities (minus signals from planets if they are known
-        to exist). Random (normal) errors are then scales by these 
+        to exist). Random (normal) errors are then scaled by these 
         residuals and returned.
 
         """
 
-        try:
-            errors = np.random.randn(len(self.residuals))
-            errors = errors*self.residuals
-        catch NameError:
+        if self.residuals is None:
             self.CalculateResiduals()
-            errors = np.random.randn(len(self.residuals))
-            errors = errors*self.residuals
+        errors = np.random.randn(len(self.residuals))
+        errors = errors*self.residuals
         return(errors)
 
-        
-        
-        
-    
+    def CalculateResiduals(self):
+        """Calcualate residuals to best fitting sinusoid to velocities."""
+        if self.periodogram is None:
+            self.CalculatePeriodogram()
+        if self.peakLocs is None:
+            self.FindPeriodogramPeaks()
+        fitFunc = lambda p, x: p[0]*np.cos(self.peakLocs[0]*x+p[1]) + p[2]
+        errFunc = lambda p, x, y: (fitFunc(p, x) - y)/self.velocityErrors/self.velocityErrors
+        p0 = [100.0, 0, 0]
+        bestFit, success = leastsq(errFunc, p0[:],
+                                   args=(self.obsTimes, self.velocities))
+        self.fit = fitFunc(bestFit, self.obsTimes)
+        self.bestFit = bestFit
+        self.residuals = self.velocities - self.fit
 
-def main():
-    star = RVTimeSeries("9826") 
+    def PlotResiduals(self, axis=None):
+        """Plot time series of the best sinusoid residuals"""
+
+        if axis is None:
+            fig = plt.figure()
+            axis = fig.add_subplot(111)
+        axis.plot(self.obsTimes, self.residuals, "o")
+        axis.set_xlabel("Time from first observation (days)")
+        axis.set_ylabel("Velocity Residuals (m/s)")
+        axis.set_title(self.starName)
+
+    def SimulatedData(self, period, semiAmplitude, phase, offset=0):
+        """Create siulated velocities with noise.i
+        
+        Args:
+            period: Period in days of signal
+            semiAmplitude: Semi-amplitude of signal in m/s
+            phase: Phase offset [0-1]
+
+        """
+        omega = 2 * PI / period
+        phi = phase * PI
+        vels = semiAmplitude*np.sin(omega*self.obsTimes+phi)+offset
+        return(self.obsTimes, vels + self.RandomErrors())
+
+    def PlotSimulatedData(self, velocities, period=None, semiAmplitude=None, 
+                          phase=None, offset=0, axis=None, fold=False):
+        """Plot a simulated dataset and optionally the true signal"""
+        if axis is None:
+            fig = plt.figure()
+            axis = fig.add_subplot(111)
+        if fold:
+            plotTimes = np.remainder(self.obsTimes, np.zeros(len(self.obsTimes))+period)
+        else:
+            plotTimes = self.obsTimes-min(self.obsTimes)
+        axis.plot(plotTimes, velocities, "o")
+        if period is not None:
+            omega = 2 * PI / period
+            phi = phase * PI
+            times = np.arange(0, self.obsTimes[-1]-min(self.obsTimes),1.0)
+            if fold:
+                times = np.remainder(times, np.zeros(len(times))+period)
+            axis.plot(times, semiAmplitude*np.sin(omega*times+phi)+offset, "o")
+
+    def MonteCarloSignalPower(self, period, semiAmplitude, nTrials=1000):
+        """Calculate periodogram power for nTrials realizations of signal.
+
+        Args:
+            period: Period of signal in days.
+            semiAmplitude: Semi-amplitude of signal in m/s.
+            nTrials: Number of realizations of signal to test power of.
+        Return: 
+            list(periodogram powers)
+
+        """
+        powers = []
+        phis = []
+        for i in range(nTrials):
+            phi = np.random.rand()
+            phis.append(phi)
+            signal = self.SimulatedData(period, semiAmplitude, phi)
+            powers.append(LombScargleSingleFreq(self.obsTimes, signal, 2*PI/period))
+        return(powers)
+
+def LombScargleSingleFreq(x, y, f):
+    """Calculate Lomb-Scargle periodogram power at a single frequency"""
+
+def main(star):
+    star = RVTimeSeries(star) 
     star.CalculatePeriodogram()
     star.FindPeriodogramPeaks()
     star.PlotPeriodogram()
     star.Plot()
     star.PlotErrMag()
+    star.CalculateResiduals()
+    star.PlotResiduals()
+    p = 200
+    v = 100
+    ph = 0.2
+    sim = star.SimulatedData(p, v, ph)
+    star.PlotSimulatedData(sim, p, v, ph)
+
+
 
 if __name__ == '__main__':
-    main()
+    main(sys.argv[1])
