@@ -9,6 +9,7 @@ from math import *
 from mks import *
 from scipy.optimize import leastsq
 
+
 class RVTimeSeries(object):
     """ Class to hold and anylize the time series data for one star. """
 
@@ -50,8 +51,8 @@ class RVTimeSeries(object):
         self.peakLocs = self.freqs[peakInd]
         #Sort Peaks
         sortInd = self.peaks.argsort()
-        self.peaks = self.peaks[sortInd[::-1]]
-        self.peakLocs = self.peakLocs[sortInd[::-1]]
+        self.peaks = self.peaks[sortInd[::-1]][0:nPeaks]
+        self.peakLocs = self.peakLocs[sortInd[::-1]][0:nPeaks]
 
     def Plot(self, axis=None, phaseFold=None):
         """Plot the time series data"""
@@ -122,9 +123,8 @@ class RVTimeSeries(object):
         p0 = [100.0, 0, 0]
         bestFit, success = leastsq(errFunc, p0[:],
                                    args=(self.obsTimes, self.velocities))
-        self.fit = fitFunc(bestFit, self.obsTimes)
-        self.bestFit = bestFit
-        self.residuals = self.velocities - self.fit
+        self.bestFitSinusoid = fitFunc(bestFit, self.obsTimes)
+        self.residuals = self.velocities - self.bestFitSinusoid
 
     def PlotResiduals(self, axis=None):
         """Plot time series of the best sinusoid residuals"""
@@ -190,23 +190,62 @@ class RVTimeSeries(object):
             powers.append(LombScargleSingleFreq(self.obsTimes, signal, 2*PI/period))
         return(powers)
 
-def LombScargleSingleFreq(x, y, f):
+    def TestLombScargle(self):
+        pGram = LombScargleSingleFreq(self.obsTimes, self.velocities,
+                                             self.freqs,
+                                             err=self.velocityErrors)
+        fig = plt.figure() 
+        axis = fig.add_subplot(111)
+        axis.plot(2*PI/self.freqs, pGram)
+def LombScargleSingleFreq(xIn, yIn, f, err=1):
     """Calculate Lomb-Scargle periodogram power at a single frequency"""
+    fitFunc = lambda p, x: p[0] * np.cos(f*x) + p[1] * np.sin(f*x) + p[2]
+    errFunc = lambda p, x, y: (fitFunc(p, x) - y) / err / err
+    p0 = [100.0, 100.0, 0]
+    bestFit, success = leastsq(errFunc, p0[:], args=(xIn, yIn))
 
-def main(star):
-    star = RVTimeSeries(star) 
+def LombScargle(xIn, yIn, freqs, err=1):
+    """Calculate Lomb-Scargle Periodogram with weighting from cumming 1999.
+
+    Args:
+        xIn (numpy.array): times
+        yIn (numpy.array): observations
+        freqs (numpy.array): frequencies at which to evaluate power
+        err (numpy.array): observation errors
+    return:
+        Lomb-Scargle power at each frequency in freqs
+
+    """
+    weights = 1/err/err
+    chi2s = np.zeros(len(freqs))
+    fitFunc = lambda p, x, f: p[0] * np.cos(f*x) + p[1] * np.sin(f*x) + p[2]
+    errFunc = lambda p, x, y, f: (fitFunc(p, x, f) - y) / err
+    fit = [100.0, 100.0, 0]
+    for i in range(len(freqs)):
+        fitPars, success = leastsq(errFunc, fit[:], args=(xIn, yIn, freqs[i]))
+        chi2s[i]= errFunc(fitPars, xIn, yIn, freqs[i]).sum()
+    mean = np.average(yIn, weights=weights)
+    chi2Line = sum(weights*(yIn-mean)**2)
+    bestChi2 = min(chi2s)
+    return((len(xIn)-3)/2*(chi2Line-chi2s)/bestChi2)
+
+
+
+def main(starName):
+    star = RVTimeSeries(starName) 
     star.CalculatePeriodogram()
     star.FindPeriodogramPeaks()
     star.PlotPeriodogram()
     star.Plot()
     star.PlotErrMag()
     star.CalculateResiduals()
-    star.PlotResiduals()
-    p = 200
-    v = 100
-    ph = 0.2
-    sim = star.SimulatedData(p, v, ph)
-    star.PlotSimulatedData(sim, p, v, ph)
+    # star.PlotResiduals()
+    # p = 200
+    # v = 100
+    # ph = 0.2
+    # sim = star.SimulatedData(p, v, ph)
+    # star.PlotSimulatedData(sim, p, v, ph)
+    star.TestLombScargle()
 
 
 
