@@ -8,6 +8,7 @@ from scipy.signal import find_peaks_cwt
 from math import *
 from mks import *
 from scipy.optimize import leastsq
+from astroML.linear_model import BasisFunctionRegression
 
 
 class RVTimeSeries(object):
@@ -19,6 +20,7 @@ class RVTimeSeries(object):
         data = lickData.GetVelsErrs(starName)
         self.starName = starName
         self.obsTimes = np.array(data[0])
+        # self.obsTimes = 
         self.velocities = np.array(data[1])
         self.velocityErrors = np.array(data[2])
         lickData.Close()
@@ -191,12 +193,12 @@ class RVTimeSeries(object):
         return(powers)
 
     def TestLombScargle(self):
-        pGram = LombScargleSingleFreq(self.obsTimes, self.velocities,
+        pGram = LombScargleLinear(self.obsTimes, self.velocities,
                                              self.freqs,
                                              err=self.velocityErrors)
         fig = plt.figure() 
         axis = fig.add_subplot(111)
-        axis.plot(2*PI/self.freqs, pGram)
+        # axis.semilogx(2*PI/self.freqs, pGram)
 def LombScargleSingleFreq(xIn, yIn, f, err=1):
     """Calculate Lomb-Scargle periodogram power at a single frequency"""
     fitFunc = lambda p, x: p[0] * np.cos(f*x) + p[1] * np.sin(f*x) + p[2]
@@ -227,18 +229,72 @@ def LombScargle(xIn, yIn, freqs, err=1):
     mean = np.average(yIn, weights=weights)
     chi2Line = sum(weights*(yIn-mean)**2)
     bestChi2 = min(chi2s)
-    return((len(xIn)-3)/2*(chi2Line-chi2s)/bestChi2)
+    # return((len(xIn)-3)/2*(chi2Line-chi2s)/bestChi2)
+    return chi2s
 
+def LombScargleLinear(xIn, yIn, freqs, err=1):
+    def linearSin(X, freq=1):
+        rtn = (np.hstack((np.sin(X*freq), np.cos(X*freq), np.ones((len(X),1)))))
+        print rtn.shape
+        return(np.hstack((np.sin(X*freq), np.cos(X*freq), np.ones((len(X), 1)))))
+    model = BasisFunctionRegression(linearSin, freq=1)
+    mu = np.linspace(0, 1, 10)[:, np.newaxis]
+    sigma = .1
+    # model = BasisFunctionRegression("gaussian", mu=mu, sigma=sigma)
+    xIn.shape = (len(xIn),1)
+    print xIn.dtype
+    # xIn = (xIn - min(xIn))/xIn.ptp()*6
+    xIn = (xIn - min(xIn))/10000
+    fig = plt.figure()
+    axis = fig.add_subplot(111)
+    axis.plot(xIn, linearSin(xIn, freqs[len(freqs)*.8]), "o")
+    # xIn = np.linspace(min(xIn), max(xIn),500)[:,None]
+    # axis.plot(xIn, linearSin(xIn, freqs[len(freqs)*.8]))
+    xIn = np.random.random((53, 1)) # 100 points in 1 # dimension 
+    chi2s = np.zeros(len(freqs))
+    print xIn
+    for i in range(len(freqs)):
+        # model.kwargs["freq"]=freqs[0]
+        model.fit(xIn, yIn, 1) 
+        import pdb; pdb.set_trace()
+
+
+def linearSin(X, freq=1):
+    rtn = (np.hstack((np.sin(X*freq), np.cos(X*freq), np.ones((len(X), 1)))))
+    print rtn.shape
+    return(np.hstack((np.sin(X*freq), np.cos(X*freq), np.ones((len(X), 1)))))
 
 
 def main(starName):
+    # f = BasisFunctionRegression('gaussian', mu=range(10), sigma=1)
+    # x = np.random.random((100,1))*4-2
+    # y = f.basis_func(x, mu=np.array([0,1])[:,None], sigma=1)
+    # y2 = linearSin(x)
+    # fig = plt.figure()
+    # axis = fig.add_subplot(111)
+    # axis.plot(x,y2)
+    import numpy as np
+    from astroML.linear_model import BasisFunctionRegression
+    X = np.random.random((100, 1))  # 100 points in 1 # dimension
+    dy = 0.1
+    y = np.random.normal(X[:, 0], dy)
+    mu = np.linspace(0, 1, 10)[:, np.newaxis]
+    # 10 x 1 array of mu 
+    sigma = 0.1
+    model = BasisFunctionRegression('gaussian', mu=mu, sigma=sigma)
+    model.fit(X, y, dy)
+    print "book: ", type(X), X.shape
+    print "book: ", type(y), y.shape
+    # print type(dy), dy.shape
+    y_pred = model.predict(X)
+    # import pdb; pdb.set_trace()
     star = RVTimeSeries(starName) 
     star.CalculatePeriodogram()
     star.FindPeriodogramPeaks()
     star.PlotPeriodogram()
-    star.Plot()
-    star.PlotErrMag()
-    star.CalculateResiduals()
+    # star.Plot()
+    # star.PlotErrMag()
+    # star.CalculateResiduals()
     # star.PlotResiduals()
     # p = 200
     # v = 100
@@ -246,7 +302,7 @@ def main(starName):
     # sim = star.SimulatedData(p, v, ph)
     # star.PlotSimulatedData(sim, p, v, ph)
     star.TestLombScargle()
-
+    
 
 
 if __name__ == '__main__':
