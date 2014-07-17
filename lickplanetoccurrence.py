@@ -6,7 +6,10 @@ from astroML.time_series import lomb_scargle
 from math import *
 from mks import *
 from scipy.optimize import leastsq
-from astroML.linear_model import BasisFunctionRegression
+from scipy.interpolate import griddata
+from sklearn.linear_model import Lasso
+from astroML.linear_model import NadarayaWatson
+from sklearn.gaussian_process import GaussianProcess
 
 
 class RVTimeSeries(object):
@@ -26,6 +29,9 @@ class RVTimeSeries(object):
         self.residuals = None
         self.peakLocs = None
         self.peaks = None
+        self.gridAmplitudes = None
+        self.gridFractionDetectable = None
+        self.gridPeriods = None
 
     def CalculatePeriodogram(self):
         """Calculate the Lomb-Scargle periodogram."""
@@ -190,76 +196,140 @@ class RVTimeSeries(object):
         for i in range(nTrials):
             phi = np.random.rand()
             phis.append(phi)
-            signal = self.SimulatedData(period, semiAmplitude, phi)
+            signal = self.SimulatedData(period, semiAmplitude, phi)[1]
+            error = self.residuals
+            error = 1
             powers.append(LombScargleSingleFreq(self.obsTimes, signal,
-                                                2*PI/period))
+                                                2*PI/period, err=error))
         return(powers)
 
-    def TestLombScargle(self):
-        power = LombScargleSingleFreq(self.obsTimes, self.velocities,
-                                      self.peakLocs[0], err=self.velocityErrors)
-        print self.peaks[0], power
-        # fig = plt.figure()
-        # axis = fig.add_subplot(111)
-        # axis.semilogx(2*PI/self.freqs, pGram)
+    def DetectabilityGrid(self, periods, nAmplitudes=100, nTrials=1000):
+        """Calculate detectabilites for signals in a period/amplitude grid.
+
+        Description:
+
+        Args:
+            periods: The periods for the grid.
+            nAmplitudes: The number of amplitudes to test at each period.
+
+        """
+        amplitudes = []
+        fractionDetectable = []
+        periodsOut = []
+        for i in range(len(periods)):
+            print i
+            maxSA = 100
+            minSA = 0
+            thisSA = np.random.random() * maxSA
+            for j in range(nAmplitudes):
+                powers = self.MonteCarloSignalPower(periods[i], thisSA,
+                                                    nTrials=nTrials)
+                frac = float(sum(powers > self.peaks[0])) / nTrials
+                amplitudes.append(thisSA)
+                fractionDetectable.append(frac)
+                periodsOut.append(periods[i])
+                if frac > 0.99999:
+                    maxSA = thisSA
+                elif frac < 0.00001:
+                    minSA = thisSA
+                thisSA = np.random.random() * (maxSA - minSA) + minSA
+        self.gridAmplitudes = np.array(amplitudes)
+        self.gridDetectability = np.array(fractionDetectable)
+        self.gridPeriods = np.array(periodsOut)
+        return(self.gridPeriods, self.gridAmplitudes, self.gridDetectability)
+
+    def PlotDetectabilityGrid(self, axis=None, data=None):
+        if data is not None:
+            self.gridPeriods = data[0]
+            self.gridAmplitudes = data[1]
+            self.gridDetectability = data[2]
+        if self.gridAmplitudes is None:
+            self.DetectabilityGrid(np.linspace(1, 1000, 20))
+        if axis is None:
+            fig = plt.figure()
+            axis = fig.add_subplot(111)
+        # periods = np.linspace(np.log10(self.gridPeriods.min()),
+        #                       np.log10(self.gridPeriods.max()), 100)
+        periods = list(set(np.log10(self.gridPeriods)))
+        periods.sort()
+        periods = np.array(periods)
+        semiAmp = np.linspace(0, 100, 100)
+        pIn = np.hstack((self.gridPeriods,
+                        [self.gridPeriods.min(), self.gridPeriods.min(),
+                         self.gridPeriods.max(), self.gridPeriods.max()]))
+        periodsIn = np.log10(pIn)
+        amplitudeIn = np.hstack((self.gridAmplitudes, [0, 100, 0, 100]))
+        detectabilityIn = np.hstack((self.gridDetectability, [0, 1, 0, 1]))
+        detectableFraction = griddata((periodsIn, amplitudeIn),
+                                      detectabilityIn,
+                                      (periods[None, :], semiAmp[:, None]))
+        detectableFraction = GridDetectibilites(periodsIn, amplitudeIn, detectabilityIn, semiAmp)
+        axis.matshow(detectableFraction, origin="lower", extent=[min(periods),
+                     max(periods), min(semiAmp), max(semiAmp)],
+                     aspect=(periods.ptp()/semiAmp.ptp()))
+        axis.set_ylabel("Semi-amplitude")
+        axis.set_xlabel("Period (Days)")
+        tickMax = int(floor(periods.max()))
+        tickMin = int(ceil(periods.min()))
+        tickLocs = range(tickMin, tickMax+1)
+        labels = [str(10**x) for x in tickLocs]
+        axis.set_xticks(tickLocs)
+        axis.set_xticklabels(labels)
+
+
+def GridDetectibilites(period, amps, detectability, newAmps):
+    """Put the detectability info onto a regular grid.
+
+    Args:
+        period: Periods for each data point.
+        amps: Semi-amplitudes for each datapoint.
+        detectability: Detected fraction for each datapoint.
+    Return:
+        2-D numpy array of detectability gridded onto period by newAmps.
+
+    """
+    periods = list(set(period))
+    periods.sort()
+    grid = np.zeros((len(newAmps), len(periods)))
+    for i, p in enumerate(periods):
+        # Select data for just this period and add endpoints
+        ind = np.where(period == p)
+        ampsThisP = np.hstack((0, amps[ind], 100))
+        detectThisP = np.hstack((0, detectability[ind], 1))
+        # Fix the shapes of arrays so they can be used in fitter
+        ampsThisP.shape = (len(ampsThisP), 1)
+        detectThisP.shape = (len(detectThisP),)
+        newAmps.shape = (len(newAmps), 1)
+        # Fit with Gaussian Kernel Regression
+        model = NadarayaWatson('gaussian', h=1)
+        model.fit(ampsThisP, detectThisP)
+        gridDetectability = model.predict(newAmps)
+        #Make sure everything is between limits
+        gridDetectability[np.where(gridDetectability < 1e-3)] = 0
+        gridDetectability[np.where(gridDetectability > 0.999)] = 1
+        grid[:, i] = gridDetectability
+    return grid
 
 
 def LombScargleSingleFreq(xIn, yIn, f, err=1):
-    """Calculate Lomb-Scargle periodogram power at a single frequency"""
-    power = lomb_scargle(xIn, yIn, err, f, generalized=True)
+    """Calculate Lomb-Scargle periodogram power at a single frequency weighted
+    as in cumming 1999
+
+    """
+    power = lomb_scargle(xIn, yIn, err, [f, .005], generalized=True)[0]
     power = power / (1 - power) * (len(xIn) - 3) / 2
     return power
 
 
-def LombScargle(xIn, yIn, freqs, err=1):
-    """Calculate Lomb-Scargle Periodogram with weighting from cumming 1999.
-
-    Args:
-        xIn (numpy.array): times
-        yIn (numpy.array): observations
-        freqs (numpy.array): frequencies at which to evaluate power
-        err (numpy.array): observation errors
-    return:
-        Lomb-Scargle power at each frequency in freqs
-
-    """
-    weights = 1/err/err
-    chi2s = np.zeros(len(freqs))
-    fitFunc = lambda p, x, f: p[0] * np.cos(f*x) + p[1] * np.sin(f*x) + p[2]
-    errFunc = lambda p, x, y, f: (fitFunc(p, x, f) - y) / err
-    fit = [100.0, 100.0, 0]
-    fig = plt.figure()
-    axis = fig.add_subplot(111)
-    for i in range(len(freqs)):
-        fitPars, success = leastsq(errFunc, fit[:], args=(xIn, yIn, freqs[i]))
-        chi2s[i] = errFunc(fitPars, xIn, yIn, freqs[i]).sum()
-        axis.clear()
-        axis.plot(xIn, yIn, "ro")
-        x = np.linspace(min(xIn), max(xIn), 300)
-        axis.plot(x, fitFunc(fitPars, x, freqs[i]), "bo")
-        axis.set_title(str(i))
-        plt.show()
-        print i
-        if i%20 == 0:
-            import pdb; pdb.set_trace()
-    mean = np.average(yIn, weights=weights)
-    chi2Line = sum(weights*(yIn-mean)**2)
-    bestChi2 = min(chi2s)
-    return((len(xIn)-3)/2*(chi2Line-chi2s)/bestChi2)
-
-
-def linearSin(X, freq=1):
-    rtn = (np.hstack((np.sin(X*freq), np.cos(X*freq), np.ones((len(X), 1)))))
-    print rtn.shape
-    return(np.hstack((np.sin(X*freq), np.cos(X*freq), np.ones((len(X), 1)))))
-
-
-def main(starName="98697"):
+def main(data=None, starName="98697"):
     star = RVTimeSeries(starName)
     star.CalculatePeriodogram()
     star.FindPeriodogramPeaks()
-    star.PlotPeriodogram()
     # star.Plot()
+    if data is None:
+        periods = np.power(10, np.linspace(np.log10(1), np.log10(10000), 300))
+        data = star.DetectabilityGrid(periods)
+    star.PlotDetectabilityGrid(data=data)
     # star.PlotErrMag()
     # star.CalculateResiduals()
     # star.PlotResiduals()
@@ -268,7 +338,10 @@ def main(starName="98697"):
     # ph = 0.2
     # sim = star.SimulatedData(p, v, ph)
     # star.PlotSimulatedData(sim, p, v, ph)
-    star.TestLombScargle()
+    # fig = plt.figure()
+    # axis = fig.add_subplot(111)
+    # axis.plot(data[1], data[2], "ro")
+    return(data)
 
 
 if __name__ == '__main__':
